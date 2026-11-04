@@ -5,8 +5,12 @@ import {parseArgs} from 'node:util';
 import {Car,points,length,width,notes} from './rally.js';
 import {STEP} from './public/physics.js';
 const {values}=parseArgs({options:{host:{type:'string'},port:{type:'string'},domain:{type:'string'}}});
-const domain=(values.domain??process.env.RALLY_DOMAIN??'').toLowerCase();
-if(domain&&!/^[a-z0-9-]+(?:\.[a-z0-9-]+)+$/.test(domain))throw Error('Ungültige Basisdomain');
+// Empty environment values must not become port 0 (a random, unpublished port).
+const portText=(values.port??process.env.PORT??'').trim()||'8080';
+const port=Number(portText),host=values.host??'0.0.0.0';
+if(!/^\d+$/.test(portText)||!Number.isInteger(port)||port>65535)throw Error('PORT / --port muss eine ganze Zahl von 0 bis 65535 sein; für Hosting z. B. 8080 verwenden.');
+const domain=(values.domain??process.env.RALLY_DOMAIN??'').trim().toLowerCase();
+if(domain&&!/^[a-z0-9-]+(?:\.[a-z0-9-]+)+$/.test(domain))throw Error('Ungültige Basisdomain: RALLY_DOMAIN / --domain muss ein Hostname wie rally.example.com sein, ohne https://, Pfad oder Port. Für Hosting ohne Raum-Subdomains leer lassen.');
 const rooms=new Map(), alphabet='ABCDEFGHJKLMNPQRSTUVWXYZ23456789', roles=['driver','navigator'];
 const now=()=>performance.now()/1000;
 const fail=(status,message)=>{throw Object.assign(Error(message),{status});};
@@ -82,11 +86,12 @@ setInterval(()=>{
 const types={'index.html':'text/html','app.js':'text/javascript','physics.js':'text/javascript','world.js':'text/javascript','style.css':'text/css','vendor/three.module.min.js':'text/javascript','vendor/THREE-LICENSE.txt':'text/plain'};
 const files=new Map(Object.entries(types).map(([name,type])=>['/'+name,[type,readFileSync(new URL('./public/'+name,import.meta.url))]]));
 const json=(res,status,value)=>send(res,status,'application/json',JSON.stringify(value));
-function send(res,status,type,data){res.writeHead(status,{'Content-Type':type+'; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});res.end(data);}
-createServer(async(req,res)=>{
+function send(res,status,type,data){res.writeHead(status,{'Content-Type':type+'; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});res.end(res.req.method==='HEAD'?undefined:data);}
+const server=createServer(async(req,res)=>{
   try{
     const path=(req.url??'').split('?')[0];
-    if(req.method==='GET'){
+    if(req.method==='GET'||req.method==='HEAD'){
+      if(path==='/healthz')return json(res,200,{status:'ok'});
       if(path==='/api/config')return json(res,200,{domain});
       if(path==='/api/track')return json(res,200,{points,length,width});
       const file=files.get(path==='/'||/^\/raum\/[a-z2-9]{6}\/?$/i.test(path)?'/index.html':path);
@@ -101,4 +106,12 @@ createServer(async(req,res)=>{
     }
     fail(404,'Seite nicht gefunden.');
   }catch(e){if(!e.status)console.error(e);if(!res.headersSent)json(res,e.status??500,{error:e.status?e.message:'Serverfehler.'});}
-}).listen(Number(values.port??process.env.PORT??8080),values.host??'0.0.0.0',function(){console.log('Blind Rally: http://localhost:'+this.address().port);});
+});
+server.on('error',e=>{
+  console.error(`Blind Rally: Start auf ${host}:${port} fehlgeschlagen (${e.code}): ${e.message}`);
+  process.exitCode=1;
+});
+server.listen(port,host,function(){
+  const address=this.address(),displayHost=address.address.includes(':')?'['+address.address+']':address.address;
+  console.log(`Blind Rally: http://${displayHost}:${address.port} (Healthcheck: /healthz)`);
+});
