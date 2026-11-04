@@ -217,11 +217,14 @@ export function mountWorld(host, track) {
   function draw(state,dt,menu=false,moving=false) {
     if(!moving&&painted&&!renderDirty&&lastMenu===menu&&lastReset===state.reset_id)return;
     if(moving){
-      slowFrames=dt>.022&&dt<.09?slowFrames+1:Math.max(0,slowFrames-2);
-      if(slowFrames>=14&&scale>.65){
-        scale=Math.max(.65,scale*.86);
+      if(dt>.019&&dt<.09)slowFrames++;else slowFrames=Math.max(0,slowFrames-3);
+      if(slowFrames>=40&&scale>.65){
+        scale=Math.max(.65,scale*.93);
         renderer.setPixelRatio(scale);
         slowFrames=0;
+      }else if(slowFrames===0&&scale<maxScale){
+        scale=Math.min(maxScale,scale+.003);
+        renderer.setPixelRatio(scale);
       }
     }
     renderDirty=false;

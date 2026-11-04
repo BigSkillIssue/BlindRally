@@ -50,10 +50,10 @@ export function makePrediction(Car){
     }
     const distance=Math.hypot(offset.x,offset.z);
     if(distance){
-      const move=Math.min(distance*(1-Math.exp(-dt*8)),4*dt);
+      const move=Math.min(distance*(1-Math.exp(-dt*5)),2.5*dt);
       offset.x*=1-move/distance;offset.z*=1-move/distance;
     }
-    const turn=Math.min(Math.abs(offset.yaw)*(1-Math.exp(-dt*8)),.8*dt);
+    const turn=Math.min(Math.abs(offset.yaw)*(1-Math.exp(-dt*5)),.5*dt);
     offset.yaw-=Math.sign(offset.yaw)*turn;
     return sample();
   }

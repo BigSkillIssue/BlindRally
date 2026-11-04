@@ -145,7 +145,7 @@ async function poll(){
     if(e.status===401||e.status===404){clearSession();error(e);return;}
     if($('error').hidden)error(Error('Verbindung unterbrochen. Neuer Versuch …'));
   }
-  if(role)setTimeout(poll,Math.max(0,(role==='driver'?45:95)-(performance.now()-started)));
+  if(role)setTimeout(poll,Math.max(0,(role==='driver'?33:80)-(performance.now()-started)));
 }
 function map(){
   const c=$('map'),ratio=Math.min(devicePixelRatio,2),w=c.clientWidth,h=c.clientHeight;
