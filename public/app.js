@@ -1,6 +1,8 @@
+import {makePhysics,STEP} from './physics.js';
 const $=id=>document.getElementById(id);
 const views=['home','lobby','driver','navigator','finish'];
 let code='',token='',role='',state,track,world,next,keys=0,spoken=false,lastCall=0,callUntil=0,phase='',displayCar;
+let Car,predicted,authoritative,correctionAge=0;
 const config=fetch('/api/config').then(r=>r.json());
 const geometry=fetch('/api/track').then(r=>r.json()).then(t=>track=t);
 function error(e){$('error').textContent=e.message;$('error').hidden=false;clearTimeout(error.timer);error.timer=setTimeout(()=>$('error').hidden=true,5500);}
@@ -15,6 +17,10 @@ async function urlFor(c){
   return domain?'https://'+c.toLowerCase()+'.'+domain+'/':new URL('/raum/'+c,location.origin).href;
 }
 bind('create','click',async()=>location.assign(await urlFor((await api('create')).code)));
+bind('solo','click',async()=>{
+  const room=await api('create',{solo:true});
+  location.assign(new URL('/raum/'+room.code,location.origin));
+});
 bind('join','submit',async e=>{e.preventDefault();const c=$('code').value.trim().toUpperCase();if(!/^[A-Z2-9]{6}$/.test(c))throw Error('Bitte gib einen sechsstelligen Raumcode ein.');location.assign(await urlFor(c));});
 bind('copy','click',async()=>{
   const link=await urlFor(code);
@@ -53,7 +59,18 @@ for(const button of document.querySelectorAll('[data-key]')){
   for(const event of ['pointerup','pointercancel','lostpointercapture'])button.addEventListener(event,e=>{touches.delete(e.pointerId);input();});
 }
 function time(s){const n=Math.floor(Math.max(0,s)*100),p=x=>String(x).padStart(2,'0');return p(Math.floor(n/6000))+':'+p(Math.floor(n/100)%60)+'.'+p(n%100);}
-function update(s){
+function update(s,sentKeys=keys,latency=0){
+  if(role==='driver'){
+    if(!predicted||!state||state.phase!==s.phase||state.car.reset_id!==s.car.reset_id){
+      predicted=Object.assign(new Car(),s.car);
+    }
+    authoritative=Object.assign(new Car(),s.car);
+    correctionAge=0;
+    if(s.phase==='racing'){
+      let lead=Math.min(.12,latency/2);
+      while(lead>0){const step=Math.min(STEP,lead);authoritative.step(step,sentKeys);lead-=step;}
+    }
+  }
   state=s;
   if(s.phase!==phase){
     if(!(phase==='countdown'&&s.phase==='racing'))clearInputs();
@@ -64,8 +81,9 @@ function update(s){
   const playing=phase==='countdown'||phase==='racing';
   $('countdown').hidden=phase!=='countdown';
   if(phase==='countdown')$('countdown').textContent=Math.max(1,Math.ceil(s.countdown));
-  $('seats').textContent=['driver','navigator'].map((r,i)=> (i?'Beifahrer':'Fahrer')+': '+(r in s.seats?(s.seats[r]?'bereit ✓':'im Raum'):'frei')).join('  ·  ');
-  $('ready').textContent=s.seats[role]?'Bereit ✓':'Bereit';
+  $('invite').hidden=$('inviteHelp').hidden=s.solo;
+  $('seats').textContent=(s.solo?['driver']:['driver','navigator']).map((r,i)=> (i?'Beifahrer':'Fahrer')+': '+(r in s.seats?(s.seats[r]?'bereit ✓':'im Raum'):'frei')).join('  ·  ');
+  $('ready').textContent=s.solo?'Fahrtest starten':s.seats[role]?'Bereit ✓':'Bereit';
   $('dtime').textContent=$('ntime').textContent=time(s.elapsed);
   $('speed').textContent=Math.round(s.car.speed*3.6);
   $('result').textContent=time(s.elapsed);
@@ -84,7 +102,7 @@ function update(s){
   }
 }
 async function poll(){
-  try{update(await api('poll',{keys}));}
+  try{const started=performance.now(),sentKeys=keys;update(await api('poll',{keys:sentKeys}),sentKeys,(performance.now()-started)/1000);}
   catch(e){
     if(e.status===401||e.status===404){role='';view('home');error(e);return;}
     if($('error').hidden)error(Error('Verbindung unterbrochen. Neuer Versuch …'));
@@ -124,8 +142,27 @@ function frame(t){
   if(callUntil&&t>callUntil){$('received').hidden=true;callUntil=0;}
   if(world&&!$('world').hidden){
     const car=state?.car??{x:0,z:3,yaw:0,reset_id:0};
-    if(!displayCar||displayCar.reset_id!==car.reset_id||phase==='lobby')displayCar={...car};
-    else{const blend=1-Math.exp(-dt*24);for(const k of ['x','z','yaw'])displayCar[k]+=(car[k]-displayCar[k])*blend;}
+    if(role==='driver'&&phase==='racing'&&predicted&&authoritative){
+      let left=dt;
+      while(left>0){
+        const step=Math.min(STEP,left);
+        predicted.step(step,keys);
+        if(correctionAge<.12){authoritative.step(step,keys);correctionAge+=step;}
+        left-=step;
+      }
+      // Never wait for the network to render. Pull small prediction errors
+      // toward the server gradually while fresh snapshots are arriving.
+      if(correctionAge<.12){
+        const gap=Math.hypot(authoritative.x-predicted.x,authoritative.z-predicted.z);
+        if(gap>8)Object.assign(predicted,authoritative);
+        else{
+          const blend=1-Math.exp(-dt*(gap>1.7?5:2.2));
+          for(const k of ['x','z','yaw','vx','vz','yawRate','s'])predicted[k]+=(authoritative[k]-predicted[k])*blend;
+        }
+      }
+      displayCar=predicted;
+      $('speed').textContent=Math.round(predicted.speed*3.6);
+    }else displayCar=car;
     world.draw(displayCar,dt,!role);
   }
   if(!$('navigator').hidden&&t-lastMap>30){map();lastMap=t;}
@@ -136,13 +173,16 @@ async function init(){
   const sub=domain&&host.endsWith('.'+domain)?host.slice(0,-domain.length-1):'';
   code=(location.pathname.match(/^\/raum\/([a-z2-9]{6})\/?$/i)?.[1]??sub).toUpperCase();
   await geometry;
+  ({Car}=makePhysics(track));
   if(code){
     try{
       const joined=await api('join',{token:sessionStorage.getItem('seat:'+code)??''});
       ({role,token}=joined);sessionStorage.setItem('seat:'+code,token);
       $('roomCode').textContent=code;$('length').textContent=(track.length/1000).toFixed(2).replace('.',',')+' KM';
       $('roleHelp').textContent=role==='driver'?'Du bist Fahrer. Verlass dich auf die Ansagen.':'Du bist Beifahrer. Du siehst die Karte und gibst die Kurven durch.';
-      update(joined.state);poll();
+      update(joined.state);
+      if(joined.state.solo && joined.state.phase==='lobby')await api('ready');
+      poll();
     }catch(e){error(e);view('home');}
   }
   requestAnimationFrame(frame);

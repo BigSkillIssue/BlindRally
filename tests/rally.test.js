@@ -3,6 +3,26 @@ import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
 import {once} from 'node:events';
 import {Car,point,length} from '../rally.js';
+import {tireForces,STEP} from '../public/physics.js';
+test('Reifenkräfte: Gegenkraft zum Schlupf, Last und Reibung begrenzen den Grip',()=>{
+  const pure=tireForces(0,.1,36500,5000,.83);
+  const combined=tireForces(3800,.1,36500,5000,.83);
+  const unloaded=tireForces(0,.1,36500,2200,.83);
+  assert.ok(pure[1]<0);
+  assert.ok(Math.abs(combined[1])<Math.abs(pure[1]));
+  assert.ok(Math.abs(unloaded[1])<Math.abs(pure[1]));
+  assert.ok(Math.hypot(...combined)<=5000*.83+1e-9);
+  assert.deepEqual(tireForces(1000,.2,36500,0,.83),[0,0]);
+});
+test('Wagen bleibt am Start stehen und legt Rückwärtsgang erst nach dem Bremsen ein',()=>{
+  const car=new Car();
+  for(let i=0;i<90;i++)car.step(STEP,0);
+  assert.equal(car.speed,0);
+  for(let i=0;i<12;i++)car.step(STEP,2);
+  assert.ok(car.vz<.2);
+  for(let i=0;i<90;i++)car.step(STEP,2);
+  assert.ok(car.vz>1);
+});
 test('Fahrmodell: Handbremse verlangsamt, lenken dreht, Reset kostet Zeit',()=>{
   const normal=new Car(),braking=new Car();
   for(let i=0;i<90;i++){normal.step(1/60,1);braking.step(1/60,1);}
@@ -10,6 +30,14 @@ test('Fahrmodell: Handbremse verlangsamt, lenken dreht, Reset kostet Zeit',()=>{
   assert.ok(braking.speed<normal.speed);
   assert.ok(braking.yaw>0);
   braking.reset();assert.equal(braking.penalty,5);assert.equal(braking.speed,0);
+});
+test('Handbremse löst bei Tempo einen stärkeren Drift aus',()=>{
+  const normal=new Car(),drift=new Car();
+  for(let i=0;i<140;i++){normal.step(1/60,1);drift.step(1/60,1);}
+  for(let i=0;i<42;i++){normal.step(1/60,1|4);drift.step(1/60,1|4|16);}
+  assert.ok(Math.abs(drift.slip)>.35);
+  assert.ok(Math.abs(drift.slip)>2*Math.abs(normal.slip));
+  assert.ok(drift.speed<normal.speed);
 });
 test('Strecke: Ziel erst nach allen Kontrollpunkten',()=>{
   const car=new Car();

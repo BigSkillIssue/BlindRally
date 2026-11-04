@@ -1,14 +1,15 @@
 import * as T from './vendor/three.module.min.js';
 
-const groundY = (x,z) => 2.9*Math.sin(-z*.018)+2.1*Math.sin(-z*.041)+1.1*Math.sin(x*.035-z*.014);
+import {groundY} from './physics.js';
+
 function random(seed) { return () => ((seed = (Math.imul(seed,1664525)+1013904223)>>>0)/4294967296); }
 
 export function mountWorld(host, track) {
   const scene = new T.Scene();
   scene.background = new T.Color(0xafc9ba);
-  scene.fog = new T.FogExp2(0xafc9ba, .009);
+  scene.fog = new T.Fog(0xafc9ba, 12, 54);
   const renderer = new T.WebGLRenderer({antialias:true});
-  renderer.setPixelRatio(Math.min(devicePixelRatio,1.6));
+  renderer.setPixelRatio(Math.min(devicePixelRatio,1.35));
   renderer.outputColorSpace = T.SRGBColorSpace;
   host.append(renderer.domElement);
   renderer.domElement.setAttribute('aria-hidden','true');
@@ -27,7 +28,7 @@ export function mountWorld(host, track) {
   const mat = (color) => new T.MeshStandardMaterial({color,roughness:1,flatShading:true});
   const rand=random(862043), matrix=new T.Object3D(), tempColor=new T.Color();
 
-  const terrain = new T.PlaneGeometry(970,1190,194,238);
+  const terrain = new T.PlaneGeometry(970,1190,140,170);
   terrain.rotateX(-Math.PI/2); terrain.translate(0,0,-400);
   const ground=terrain.attributes.position, colors=[];
   for(let i=0;i<ground.count;i++){
@@ -66,8 +67,8 @@ export function mountWorld(host, track) {
     geom.computeVertexNormals();
     mesh(geom,new T.MeshStandardMaterial({vertexColors:true,roughness:1}));
   }
-  ribbon(-6.45,6.45,.09,0x9a7951,.17);
-  ribbon(-5.3,5.3,.14,0xa78b64,.14);
+  ribbon(-track.width-1.05,track.width+1.05,.09,0x9a7951,.17);
+  ribbon(-track.width,track.width,.14,0xa78b64,.14);
   ribbon(-2.85,-.7,.17,0x9d7e58,.11);
   ribbon(.7,2.85,.17,0x9d7e58,.11);
 
@@ -87,12 +88,12 @@ export function mountWorld(host, track) {
   for(let i=2;i<pts.length-2;i++){
     for(const side of [-1,1]){
       const [x,z]=pts[i],[nx,nz]=cross(i);
-      if(i%2===0) cluster(i,side,11+rand()*9,.74+rand()*.76);
-      if(i%3===0) cluster(i,side,22+rand()*17,1+rand()*1.1);
-      const offset=6.9+rand()*4, px=x+nx*offset*side,pz=z+nz*offset*side;
-      if(i%2===0) bushes.push([px,groundY(px,pz)+.3,pz,1+rand()*1.25,.7+rand()*1.1,1+rand(),rand()*6,rand()<.5?0x4d6338:0x6c773d]);
+      cluster(i,side,8.4+rand()*8,.88+rand()*.88);
+      if(i%2===0) cluster(i,side,19+rand()*17,1+rand()*1.1);
+      const offset=4.8+rand()*4, px=x+nx*offset*side,pz=z+nz*offset*side;
+      bushes.push([px,groundY(px,pz)+.3,pz,1+rand()*1.25,.7+rand()*1.1,1+rand(),rand()*6,rand()<.5?0x4d6338:0x6c773d]);
       if(i%5===0) rocks.push([px,groundY(px,pz)+.18,pz,.8+rand(),.45+rand()*.7,1+rand(),rand()*6,0x776d55]);
-      if(i%13===3) {
+      if(i%10===3) {
         const cx=x+nx*side*(23+rand()*14), cz=z+nz*side*(23+rand()*10), h=9+rand()*14;
         cliffs.push([cx,groundY(cx,cz)+h*.21,cz,12+rand()*9,h,11+rand()*7,rand()*6,rand()<.5?0x617461:0x7f8270]);
       }
@@ -124,8 +125,8 @@ export function mountWorld(host, track) {
   function gate(x,z,yaw,finish){
     const g=new T.Group(); g.position.set(x,groundY(x,z),z); g.rotation.y=-yaw; scene.add(g);
     for(const side of [-1,1]){
-      box(g,side*5.55,2.55,0,.33,5.1,.38,dark);
-      box(g,side*5.55,.58,0,.57,1.1,.62,orange);
+      box(g,side*(track.width+.25),2.55,0,.33,5.1,.38,dark);
+      box(g,side*(track.width+.25),.58,0,.57,1.1,.62,orange);
     }
     const canvas=document.createElement('canvas'); canvas.width=512;canvas.height=64;
     const ctx=canvas.getContext('2d');
@@ -134,11 +135,11 @@ export function mountWorld(host, track) {
     ctx.fillStyle='#faf1d7'; ctx.font='bold 39px monospace';ctx.textAlign='center';ctx.textBaseline='middle';
     ctx.fillText(finish?'Z I E L':'S T A R T',256,30);
     const texture=new T.CanvasTexture(canvas);texture.colorSpace=T.SRGBColorSpace;
-    const banner=mesh(new T.PlaneGeometry(10.8,1.35),new T.MeshBasicMaterial({map:texture,side:T.DoubleSide}),g);
+    const banner=mesh(new T.PlaneGeometry(track.width*2+.25,1.35),new T.MeshBasicMaterial({map:texture,side:T.DoubleSide}),g);
     banner.position.y=4.5;
     for(let i=0;i<18;i++){
-      const offset=(i-8.5)*.55;
-      const tile=box(g,offset,.01,0,.55,.018,.43,i%2?dark:white);
+      const offset=(i-8.5)*track.width/9;
+      const tile=box(g,offset,.01,0,track.width/9,.018,.43,i%2?dark:white);
       tile.position.y=groundY(x+Math.cos(yaw)*offset,z+Math.sin(yaw)*offset)-g.position.y+.22;
     }
   }
@@ -156,9 +157,11 @@ export function mountWorld(host, track) {
   box(car,.73,.75,1.98,.37,.2,.055,scarlet);
   box(car,0,.92,1.77,2.15,.14,.32,dark);
   box(car,-.68,.82,-1.99,.38,.17,.06,cream); box(car,.68,.82,-1.99,.38,.17,.06,cream);
+  const frontWheels=[];
   for(const x of [-1,1])for(const z of [-1.25,1.22]){
     const wheel=mesh(new T.CylinderGeometry(.43,.43,.33,12),dark,car);
     wheel.rotation.z=Math.PI/2;wheel.position.set(x,.43,z);
+    if(z<0)frontWheels.push(wheel);
   }
   const shadow=mesh(new T.PlaneGeometry(2.9,4.7),
     new T.MeshBasicMaterial({color:0x181c16,transparent:true,opacity:.26,depthWrite:false}));
@@ -170,6 +173,9 @@ export function mountWorld(host, track) {
     const x=menu?-.7:state.x,z=menu?4.5:state.z,yaw=menu?-.09:state.yaw;
     const y=groundY(x,z),fx=Math.sin(yaw),fz=-Math.cos(yaw);
     car.position.set(x,y+.08,z); car.rotation.y=-yaw;
+    car.rotation.x=(state.longAccel||0)*.009;
+    car.rotation.z=(state.latAccel||0)*.011;
+    for(const wheel of frontWheels)wheel.rotation.y=-(state.steer||0);
     shadow.position.set(x,y+.21,z);shadow.rotation.z=yaw;
     if(menu) {
       desire.set(9.8,y+3.25,14.8);target.set(-3,y+1,-10);

@@ -28,6 +28,12 @@ Für echte Raum-Subdomains, z. B. `abc234.rally.example.com`:
 
 Räume, Sitzungen und Bestzeiten liegen im Arbeitsspeicher. Bei mehreren Instanzen müssten alle Anfragen eines Raums zum selben Prozess gehen. Reines statisches Hosting wie GitHub Pages führt den Spielserver nicht aus.
 
+## Fahrmodell
+
+Browser und Server nutzen dasselbe Fahrmodell mit Schritten von höchstens 1/120 s. Das Einspurmodell berechnet Beschleunigung und Gier aus Kräften und Drehmomenten. Längs- und Querkräfte teilen sich pro Achse den Reibungskreis. Für die Seitenkraft verwenden wir eine Fiala-Kurve; die Radlast ändert sich beim Gasgeben und Bremsen. Hangabtrieb, Rollwiderstand, Luftwiderstand und Gleitreibung bei blockierter Hinterachse gehen als Kräfte ein. Fahrzeug und Reifen sind auf das Spiel abgestimmt; es sind keine Messdaten eines bestimmten Autos.
+
+Quellen: [Einspurmodell](https://www.mathworks.com/help/vdynblks/ref/bicyclemodel.html), [Fiala-Seitenkraft](https://help.functionbay.com/2024/RecurDynHelp/Tire/Tire_ch02_s03_03.html).
+
 ## Checks
 
 ```sh
