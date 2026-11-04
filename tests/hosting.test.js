@@ -33,7 +33,7 @@ function launch(t,{env={},args=[]}={}){
 
 test('Hosting: Startseite, Assets und Healthcheck unterstützen GET und HEAD',{timeout:10000},async t=>{
   const base=await launch(t,{env:{PORT:'0'}}).ready();
-  for(const path of ['/', '/raum/ABC234', '/app.js', '/physics.js', '/world.js', '/style.css',
+  for(const path of ['/', '/raum/ABC234', '/app.js', '/physics.js', '/prediction.js', '/world.js', '/style.css',
     '/vendor/three.module.min.js', '/api/config', '/api/track', '/healthz']){
     const get=await fetch(base+path);
     assert.equal(get.status,200,'GET '+path);

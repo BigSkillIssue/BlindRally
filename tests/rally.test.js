@@ -108,6 +108,9 @@ test('Raum: getrennte Rollen, synchroner Start, geschützte Ansagen und Reset',a
   assert.equal(driver.state.notes,undefined);assert.ok(nav.state.notes.length);
   assert.equal((await post('join',room))[0],409);
   const d={...room,token:driver.token},n={...room,token:nav.token};
+  assert.equal((await post('input',{...d,keys:1,inputSeq:10}))[1].inputSeq,10);
+  assert.equal((await post('poll',{...d,keys:2,inputSeq:9}))[1].inputSeq,10);
+  assert.equal((await post('input',{...n,keys:2,inputSeq:100}))[1].inputSeq,10);
   await post('ready',d);
   assert.equal((await post('ready',n))[1].phase,'countdown');
   assert.equal((await post('call',{...d,label:'Links'}))[0],403);
@@ -116,4 +119,8 @@ test('Raum: getrennte Rollen, synchroner Start, geschützte Ansagen und Reset',a
   await new Promise(r=>setTimeout(r,3100));
   const [,reset]=await post('reset',d);assert.equal(reset.phase,'racing');assert.equal(reset.car.penalty,5);
   assert.ok((await post('poll',n))[1].elapsed>=5);
+  await post('input',{...d,keys:1,inputSeq:20});
+  await post('poll',{...d,keys:2,inputSeq:19});
+  await new Promise(r=>setTimeout(r,150));
+  assert.ok((await post('poll',n))[1].car.vz<-.1,'Veraltete Brems-Eingabe darf neueres Gas nicht überschreiben');
 });

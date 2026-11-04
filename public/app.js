@@ -1,8 +1,9 @@
-import {makePhysics,STEP} from './physics.js';
+import {makePhysics} from './physics.js';
+import {makePrediction} from './prediction.js';
 const $=id=>document.getElementById(id);
 const views=['home','lobby','driver','navigator','finish'];
 let code='',token='',role='',state,track,world,next,keys=0,spoken=false,lastCall=0,callUntil=0,phase='',displayCar;
-let Car,predicted,authoritative,correctionAge=0;
+let prediction,inputSeq=0;
 const config=request('/api/config');
 const geometry=request('/api/track').then(t=>track=t);
 function error(e){$('error').textContent=e.message;$('error').hidden=false;clearTimeout(error.timer);error.timer=setTimeout(()=>$('error').hidden=true,5500);}
@@ -58,7 +59,14 @@ for(const label of ['Bremsen','Links eng','Rechts eng','Geradeaus','Handbremse']
 }
 const controls={KeyW:1,ArrowUp:1,KeyS:2,ArrowDown:2,KeyA:4,ArrowLeft:4,KeyD:8,ArrowRight:8,Space:16};
 const down=new Set(),touches=new Map();
-function input(){keys=0;for(const k of down)keys|=controls[k];for(const k of touches.values())keys|=k;}
+function input(){
+  const before=keys;
+  keys=0;for(const k of down)keys|=controls[k];for(const k of touches.values())keys|=k;
+  // Steering/pedal changes must not wait for an in-flight snapshot request.
+  if(keys!==before&&role==='driver'&&['countdown','racing'].includes(phase)){
+    api('input',{keys,inputSeq:++inputSeq}).catch(()=>{});
+  }
+}
 window.addEventListener('keydown',e=>{
   if(role!=='driver'||$('driver').hidden||e.target.matches('input')||(e.code==='Space'&&e.target.matches('button')))return;
   if(controls[e.code]){e.preventDefault();down.add(e.code);input();}
@@ -68,7 +76,7 @@ window.addEventListener('keyup',e=>{down.delete(e.code);input();});
 function clearInputs(){down.clear();touches.clear();input();}
 function clearSession(){
   sessionStorage.removeItem('seat:'+code);
-  clearInputs();role=token=phase='';state=predicted=authoritative=next=undefined;
+  clearInputs();role=token=phase='';state=next=undefined;
   lastCall=callUntil=0;
   $('countdown').hidden=$('received').hidden=true;
   if('speechSynthesis' in window)speechSynthesis.cancel();
@@ -90,15 +98,8 @@ function driveHud(car){
 }
 function update(s,sentKeys=keys,latency=0){
   if(role==='driver'){
-    if(!predicted||!state||state.phase!==s.phase||state.car.reset_id!==s.car.reset_id){
-      predicted=Object.assign(new Car(),s.car);
-    }
-    authoritative=Object.assign(new Car(),s.car);
-    correctionAge=0;
-    if(s.phase==='racing'){
-      let lead=Math.min(.12,latency/2);
-      while(lead>0){const step=Math.min(STEP,lead);authoritative.step(step,sentKeys);lead-=step;}
-    }
+    inputSeq=Math.max(inputSeq,s.inputSeq??0);
+    prediction.accept(s.car,keys,s.phase==='racing'?latency:0,!state||state.phase!==s.phase);
   }
   state=s;
   if(s.phase!==phase){
@@ -132,9 +133,10 @@ function update(s,sentKeys=keys,latency=0){
 }
 async function poll(){
   if(!role)return;
+  const started=performance.now();
   try{
-    const started=performance.now(),sentKeys=keys;
-    const snapshot=await api('poll',{keys:sentKeys});
+    const sentKeys=keys;
+    const snapshot=await api('poll',{keys:sentKeys,...(role==='driver'?{inputSeq:++inputSeq}:{})});
     if(!role)return;
     update(snapshot,sentKeys,(performance.now()-started)/1000);
   }
@@ -143,7 +145,7 @@ async function poll(){
     if(e.status===401||e.status===404){clearSession();error(e);return;}
     if($('error').hidden)error(Error('Verbindung unterbrochen. Neuer Versuch …'));
   }
-  if(role)setTimeout(poll,role==='driver'?45:95);
+  if(role)setTimeout(poll,Math.max(0,(role==='driver'?45:95)-(performance.now()-started)));
 }
 function map(){
   const c=$('map'),ratio=Math.min(devicePixelRatio,2),w=c.clientWidth,h=c.clientHeight;
@@ -174,34 +176,13 @@ function map(){
 let lastFrame=performance.now(),lastMap=0;
 function frame(t){
   requestAnimationFrame(frame);
-  const dt=Math.min(.1,(t-lastFrame)/1000);lastFrame=t;
+  const elapsed=(t-lastFrame)/1000,dt=Math.min(.1,elapsed);lastFrame=t;
   if(callUntil&&t>callUntil){$('received').hidden=true;callUntil=0;}
   if(world&&!$('world').hidden){
     const car=state?.car??{x:0,z:3,yaw:0,reset_id:0};
-    if(role==='driver'&&phase==='racing'&&predicted&&authoritative){
-      let left=dt;
-      while(left>0){
-        const step=Math.min(STEP,left);
-        predicted.step(step,keys);
-        if(correctionAge<.12){authoritative.step(step,keys);correctionAge+=step;}
-        left-=step;
-      }
-      // Never wait for the network to render. Pull small prediction errors
-      // toward the server gradually while fresh snapshots are arriving.
-      if(correctionAge<.12){
-        const dx=authoritative.x-predicted.x,dz=authoritative.z-predicted.z;
-        const gap=Math.hypot(dx,dz);
-        const pulling=1-Math.exp(-dt*(gap>1.7?4:1.55));
-        const move=Math.min(Math.max(0,gap-.17)*pulling,8*dt);
-        if(gap>0){predicted.x+=dx*move/gap;predicted.z+=dz*move/gap;}
-        const yawError=authoritative.yaw-predicted.yaw;
-        const angle=Math.atan2(Math.sin(yawError),Math.cos(yawError));
-        const soft=1-Math.exp(-dt*1.45);
-        predicted.yaw+=angle*soft;
-        for(const k of ['vx','vz','yawRate','s'])predicted[k]+=(authoritative[k]-predicted[k])*soft;
-      }
-      displayCar=predicted;
-      driveHud(predicted);
+    if(role==='driver'&&phase==='racing'&&prediction){
+      displayCar=prediction.advance(elapsed,keys);
+      driveHud(displayCar);
     }else displayCar=car;
     world.draw(displayCar,dt,!role,phase==='racing');
   }
@@ -212,7 +193,7 @@ async function init(){
   const host=location.hostname.toLowerCase();
   const sub=domain&&host.endsWith('.'+domain)?host.slice(0,-domain.length-1):'';
   code=(location.pathname.match(/^\/raum\/([a-z2-9]{6})\/?$/i)?.[1]??sub).toUpperCase();
-  ({Car}=makePhysics(track));
+  prediction=makePrediction(makePhysics(track).Car);
   if(code){
     try{
       const joined=await api('join',{token:sessionStorage.getItem('seat:'+code)??''});

@@ -18,13 +18,13 @@ function lobby(room){Object.assign(room,{phase:'lobby',car:new Car(),start:null,
 function snapshot(r,role,t){
   return {solo:r.solo,phase:r.phase,car:r.car,elapsed:r.finish??(r.start===null?0:Math.max(0,t-r.start)+r.car.penalty),
     countdown:r.phase==='countdown'?Math.max(0,r.start-t):0,best:r.best,calls:r.calls,
-    seats:Object.fromEntries([...r.seats].map(([k,s])=>[k,s.ready])),...(role==='navigator'?{notes}:{})};
+    seats:Object.fromEntries([...r.seats].map(([k,s])=>[k,s.ready])),...(role==='navigator'?{notes}:{inputSeq:r.inputSeq})};
 }
 function command(action,b,t){
   if(action==='create'){
     if(rooms.size>=200)fail(503,'Zu viele Räume. Versuche es später.');
     let code;do{code=Array.from({length:6},()=>alphabet[randomInt(alphabet.length)]).join('');}while(rooms.has(code));
-    const room={solo:b.solo===true,seats:new Map(),seen:t,best:null,callId:0,lastCall:-Infinity};lobby(room);rooms.set(code,room);
+    const room={solo:b.solo===true,seats:new Map(),seen:t,best:null,callId:0,lastCall:-Infinity,inputSeq:0};lobby(room);rooms.set(code,room);
     return {code};
   }
   if(typeof b.code!=='string'||!/^[A-Z2-9]{6}$/.test(b.code))fail(400,'Der Raumcode hat sechs Zeichen.');
@@ -43,7 +43,17 @@ function command(action,b,t){
   if(!role)fail(401,'Dein Platz ist abgelaufen. Bitte tritt erneut bei.');
   const seat=r.seats.get(role);r.seen=seat.seen=t;
   switch(action){
-    case 'poll':if(role==='driver'){r.keys=Number.isInteger(b.keys)?b.keys&31:0;r.inputAt=t;}break;
+    case 'input':
+    case 'poll':
+      if(role==='driver'){
+        // Discard an older poll arriving after a newer immediate input request.
+        const seq=b.inputSeq??r.inputSeq+1;
+        if(Number.isSafeInteger(seq)&&seq>r.inputSeq){
+          r.inputSeq=seq;r.keys=Number.isInteger(b.keys)?b.keys&31:0;r.inputAt=t;
+        }
+      }
+      if(action==='input')return {inputSeq:r.inputSeq};
+      break;
     case 'ready':
       if(r.phase==='lobby'){
         seat.ready=!seat.ready;
@@ -77,13 +87,13 @@ setInterval(()=>{
   for(const r of rooms.values()){
     if(r.phase==='countdown'&&t>=r.start)r.phase='racing';
     for(let i=0;i<steps&&r.phase==='racing';i++){
-      if(r.car.step(STEP,t-r.inputAt<.4?r.keys:0)){
+      if(r.car.step(STEP,t-r.inputAt<1?r.keys:0)){
         r.phase='finished';r.finish=t-r.start+r.car.penalty;r.best=Math.min(r.best??Infinity,r.finish);
       }
     }
   }
 },1000/60).unref();
-const types={'index.html':'text/html','app.js':'text/javascript','physics.js':'text/javascript','world.js':'text/javascript','style.css':'text/css','vendor/three.module.min.js':'text/javascript','vendor/THREE-LICENSE.txt':'text/plain'};
+const types={'index.html':'text/html','app.js':'text/javascript','physics.js':'text/javascript','prediction.js':'text/javascript','world.js':'text/javascript','style.css':'text/css','vendor/three.module.min.js':'text/javascript','vendor/THREE-LICENSE.txt':'text/plain'};
 const files=new Map(Object.entries(types).map(([name,type])=>['/'+name,[type,readFileSync(new URL('./public/'+name,import.meta.url))]]));
 const json=(res,status,value)=>send(res,status,'application/json',JSON.stringify(value));
 function send(res,status,type,data){res.writeHead(status,{'Content-Type':type+'; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});res.end(res.req.method==='HEAD'?undefined:data);}

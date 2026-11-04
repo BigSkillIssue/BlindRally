@@ -4,13 +4,15 @@ import {readFileSync} from 'node:fs';
 import vm from 'node:vm';
 import {setImmediate} from 'node:timers/promises';
 import {makePhysics,STEP} from '../public/physics.js';
+import {makePrediction} from '../public/prediction.js';
 
 const track=JSON.parse(readFileSync(new URL('../track.json',import.meta.url)));
 const source=readFileSync(new URL('../public/app.js',import.meta.url),'utf8')
-  .replace(/^import .*\n/,'').replace('init().catch(error);','');
+  .replace(/^import .*\n/gm,'').replace('init().catch(error);','');
 
 function browser(){
-  const elements=new Map(),storage=new Map(),requests=[],navigation=[],handlers=new Map();
+  const elements=new Map(),storage=new Map(),requests=[],navigation=[],handlers=new Map(),events=new Map(),timers=[];
+  let clock=100;
   const element=id=>{
     if(!elements.has(id))elements.set(id,{
       hidden:['lobby','driver','navigator','finish','countdown','received','error'].includes(id),
@@ -29,10 +31,10 @@ function browser(){
   handlers.set('/api/poll',()=>json(state));
   handlers.set('/api/leave',()=>json(state));
   const context=vm.createContext({
-    makePhysics,STEP,URL,AbortSignal,console,
-    performance:{now:()=>100},
-    setTimeout:()=>1,clearTimeout(){},requestAnimationFrame(){},
-    window:{addEventListener(){}},navigator:{},
+    makePhysics,makePrediction,STEP,URL,AbortSignal,console,
+    performance:{now:()=>clock},
+    setTimeout:(fn,ms)=>{timers.push({fn,ms});return timers.length;},clearTimeout(){},requestAnimationFrame(){},
+    window:{addEventListener:(event,fn)=>events.set(event,fn)},navigator:{},
     document:{getElementById:element,addEventListener(){},createElement:()=>element(Symbol()),querySelectorAll:()=>[]},
     sessionStorage:{getItem:key=>storage.get(key)??null,setItem:(key,value)=>storage.set(key,value),removeItem:key=>storage.delete(key)},
     location:{origin:'http://localhost',hostname:'localhost',pathname:'/raum/ABC234',assign:value=>navigation.push(String(value))},
@@ -45,7 +47,9 @@ function browser(){
   });
   vm.runInContext(source,context);
   const run=expression=>vm.runInContext(expression,context);
-  return {element,storage,requests,navigation,handlers,state,json,run,
+  return {element,storage,requests,navigation,handlers,state,json,run,timers,
+    setTime(value){clock=value;},
+    key(code){events.get('keydown')({code,target:{matches:()=>false},preventDefault(){}});},
     async init(){await run('init()');await setImmediate();},
     async click(id){await element(id).events.click({});await setImmediate();},
   };
@@ -88,4 +92,27 @@ test('Client: verspätete Poll-Antwort öffnet einen verlassenen Raum nicht erne
   assert.equal(b.element('home').hidden,false);
   assert.equal(b.element('navigator').hidden,true);
   assert.equal(b.element('leave').hidden,true);
+});
+
+test('Client: Lenkung wartet nicht auf eine laufende Netzwerkanfrage',async()=>{
+  const b=browser();await b.init();
+  b.run("role='driver';phase='racing';view('driver')");
+  let resolve;
+  b.handlers.set('/api/poll',()=>new Promise(done=>resolve=done));
+  b.handlers.set('/api/input',()=>b.json({inputSeq:2}));
+  const pending=b.run('poll()');
+  b.key('KeyW');
+  const input=b.requests.at(-1);
+  assert.equal(input.path,'/api/input');
+  assert.equal(JSON.parse(input.options.body).keys,1);
+  const poll=b.requests.findLast(r=>r.path==='/api/poll');
+  assert.ok(JSON.parse(input.options.body).inputSeq>JSON.parse(poll.options.body).inputSeq);
+  resolve(b.json({...b.state,phase:'racing'}));await pending;
+});
+
+test('Client: langsame Serverantwort fügt keine zusätzliche Poll-Pause hinzu',async()=>{
+  const b=browser();await b.init();
+  b.handlers.set('/api/poll',()=>{b.setTime(300);return b.json(b.state);});
+  await b.run('poll()');
+  assert.equal(b.timers.at(-1).ms,0);
 });
